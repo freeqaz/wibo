@@ -1,5 +1,11 @@
 # wibo
 
+> **Fork note (freeqaz/wibo):** This fork adds Xbox 360 MSVC toolchain support for the [Dance Central 3 decompilation project](https://github.com/milohax/dc3-decomp). The main addition is a fake `mspdb80.dll` that implements the PDB vtable stubs the X360 compiler and linker expect, including a real `SigForPbCb` (CRC-32) so the linker generates correct `??_C@_` string literal hashes. It also adds `WIBO_PATH_MAP` for bidirectional Windows/host path translation, so the compiler sees original build paths for `__FILE__` and anonymous namespace hashing.
+>
+> Other additions: `WIBO_COMPUTER_NAME` env var to override `GetComputerNameA`/`W` (needed to reproduce original CRC-32 hash seeds), `WIBO_SIGFORPBCB_LOG` for CRC call tracing, `PDBOpenEx2W` stub for `/Zi` support, and new Win32 API stubs (`InitOnceExecuteOnce`, `RtlComputeCrc32`, `RtlGenRandom`, `QueryPerformanceCounter`/`Frequency` with real monotonic clock values).
+>
+> These changes are being upstreamed incrementally — see [PR #110](https://github.com/decompals/wibo/pull/110) for the initial mspdb work.
+
 A minimal, low-fuss wrapper that can run simple command-line 32-bit Windows binaries on Linux and macOS - developed to run Windows compilers faster than Wine.
 
 Download the latest release from [GitHub releases](https://github.com/decompals/wibo/releases) or build from source.
