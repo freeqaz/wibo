@@ -297,8 +297,13 @@ DWORD_PTR WINAPI SetThreadAffinityMask(HANDLE hThread, DWORD_PTR dwThreadAffinit
 	return processMask;
 }
 
+// Defined in fileapi.cpp
+void reportFsCacheStats();
+
 [[noreturn]] void exitInternal(DWORD exitCode) {
 	DEBUG_LOG("exitInternal(%u)\n", exitCode);
+	reportFsCacheStats();
+	files::reportFilesCacheStats();
 	wibo::handles().clear();
 	_exit(static_cast<int>(exitCode));
 }

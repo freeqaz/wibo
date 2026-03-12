@@ -318,7 +318,45 @@ std::filesystem::path parentOrSelf(const std::filesystem::path &path) {
 	return parent;
 }
 
+// FS cache — gated by WIBO_FS_CACHE=1 env var
+// Caches directory listings, stat results, and path resolution for the lifetime of the process.
+// Safe because wibo runs single-threaded, one compile per process, source files don't change mid-compile.
+static bool g_fsCacheEnabled = false;
+static bool g_fsCacheChecked = false;
+
+static bool isFsCacheEnabled() {
+	if (!g_fsCacheChecked) {
+		g_fsCacheChecked = true;
+		const char *env = getenv("WIBO_FS_CACHE");
+		g_fsCacheEnabled = env && std::string(env) == "1";
+	}
+	return g_fsCacheEnabled;
+}
+
+static std::unordered_map<std::string, std::filesystem::path> g_resolvedPathCache;
+static unsigned g_resolvedPathCacheHits = 0;
+static unsigned g_resolvedPathCacheMisses = 0;
+
 std::filesystem::path resolvedPath(const std::filesystem::path &path) {
+	if (isFsCacheEnabled()) {
+		std::string key = path.string();
+		auto it = g_resolvedPathCache.find(key);
+		if (it != g_resolvedPathCache.end()) {
+			g_resolvedPathCacheHits++;
+			return it->second;
+		}
+		g_resolvedPathCacheMisses++;
+		std::error_code ec;
+		auto canonical = std::filesystem::weakly_canonical(path, ec);
+		std::filesystem::path result = !ec ? canonical : path;
+		if (ec) {
+			auto absolute = std::filesystem::absolute(path, ec);
+			if (!ec) result = absolute;
+		}
+		g_resolvedPathCache[key] = result;
+		return result;
+	}
+
 	std::error_code ec;
 	auto canonical = std::filesystem::weakly_canonical(path, ec);
 	if (!ec) {
@@ -349,6 +387,20 @@ std::string determineDisplayName(const std::filesystem::path &path, const std::s
 	return name;
 }
 
+struct CachedDirEntry {
+	std::string name;
+	std::filesystem::path fullPath;
+	bool isDirectory;
+};
+
+static std::unordered_map<std::string, std::vector<CachedDirEntry>> g_dirCache;
+static std::unordered_map<std::string, DWORD> g_statCache;
+
+static unsigned g_dirCacheHits = 0;
+static unsigned g_dirCacheMisses = 0;
+static unsigned g_statCacheHits = 0;
+static unsigned g_statCacheMisses = 0;
+
 bool collectDirectoryMatches(const std::filesystem::path &directory, const std::string &pattern,
 							 std::vector<FindSearchEntry> &outEntries) {
 	auto addEntry = [&](const std::string &name, const std::filesystem::path &path, bool isDirectory) {
@@ -364,6 +416,46 @@ bool collectDirectoryMatches(const std::filesystem::path &directory, const std::
 	}
 	if (wildcardMatchInsensitive(pattern, "..")) {
 		addEntry("..", parentOrSelf(directory), true);
+	}
+
+	if (isFsCacheEnabled()) {
+		std::string dirKey = directory.string();
+		auto it = g_dirCache.find(dirKey);
+		if (it == g_dirCache.end()) {
+			g_dirCacheMisses++;
+			// Cache miss — read directory once, store all entries
+			std::vector<CachedDirEntry> cached;
+			std::error_code iterEc;
+			for (std::filesystem::directory_iterator dit(directory, iterEc);
+				 !iterEc && dit != std::filesystem::directory_iterator(); ++dit) {
+				CachedDirEntry e;
+				e.name = dit->path().filename().string();
+				e.fullPath = resolvedPath(dit->path());
+				std::error_code statusEc;
+				e.isDirectory = dit->is_directory(statusEc);
+				if (statusEc) {
+					e.isDirectory = false;
+				}
+				cached.push_back(std::move(e));
+			}
+			if (iterEc) {
+				kernel32::setLastError(wibo::winErrorFromErrno(iterEc.value()));
+				return false;
+			}
+			it = g_dirCache.emplace(dirKey, std::move(cached)).first;
+		}
+		g_dirCacheHits++;
+		// Match pattern against cached entries
+		for (const auto &e : it->second) {
+			if (wildcardMatchInsensitive(pattern, e.name)) {
+				FindSearchEntry entry;
+				entry.name = e.name;
+				entry.fullPath = e.fullPath;
+				entry.isDirectory = e.isDirectory;
+				outEntries.push_back(std::move(entry));
+			}
+		}
+		return true;
 	}
 
 	std::error_code iterEc;
@@ -551,6 +643,14 @@ bool tryOpenConsoleDevice(DWORD dwDesiredAccess, DWORD dwShareMode, DWORD dwCrea
 
 namespace kernel32 {
 
+void reportFsCacheStats() {
+	if (g_fsCacheEnabled && getenv("WIBO_FS_CACHE_STATS")) {
+		fprintf(stderr, "[wibo] FS cache: dir %u/%u, stat %u/%u, resolve %u/%u (hits/misses)\n",
+			g_dirCacheHits, g_dirCacheMisses, g_statCacheHits, g_statCacheMisses,
+			g_resolvedPathCacheHits, g_resolvedPathCacheMisses);
+	}
+}
+
 DWORD WINAPI GetFileAttributesA(LPCSTR lpFileName) {
 	HOST_CONTEXT_GUARD();
 	if (!lpFileName) {
@@ -566,25 +666,50 @@ DWORD WINAPI GetFileAttributesA(LPCSTR lpFileName) {
 		return FILE_ATTRIBUTE_NORMAL;
 	}
 
+	// Check stat cache
+	if (isFsCacheEnabled()) {
+		auto it = g_statCache.find(pathStr);
+		if (it != g_statCache.end()) {
+			g_statCacheHits++;
+			if (it->second == INVALID_FILE_ATTRIBUTES) {
+				setLastError(ERROR_FILE_NOT_FOUND);
+			}
+			return it->second;
+		}
+		g_statCacheMisses++;
+	}
+
 	std::error_code ec;
 	auto status = std::filesystem::status(path, ec);
 	if (ec) {
 		setLastError(wibo::winErrorFromErrno(ec.value()));
+		if (isFsCacheEnabled()) {
+			g_statCache[pathStr] = INVALID_FILE_ATTRIBUTES;
+		}
 		return INVALID_FILE_ATTRIBUTES;
 	}
 
+	DWORD result;
 	switch (status.type()) {
 	case std::filesystem::file_type::regular:
 		DEBUG_LOG("File exists\n");
-		return FILE_ATTRIBUTE_NORMAL;
+		result = FILE_ATTRIBUTE_NORMAL;
+		break;
 	case std::filesystem::file_type::directory:
-		return FILE_ATTRIBUTE_DIRECTORY;
+		result = FILE_ATTRIBUTE_DIRECTORY;
+		break;
 	case std::filesystem::file_type::not_found:
 	default:
 		DEBUG_LOG("File does not exist\n");
 		setLastError(ERROR_FILE_NOT_FOUND);
-		return INVALID_FILE_ATTRIBUTES;
+		result = INVALID_FILE_ATTRIBUTES;
+		break;
 	}
+
+	if (isFsCacheEnabled()) {
+		g_statCache[pathStr] = result;
+	}
+	return result;
 }
 
 DWORD WINAPI GetFileAttributesW(LPCWSTR lpFileName) {

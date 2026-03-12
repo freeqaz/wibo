@@ -406,13 +406,8 @@ std::vector<std::filesystem::path> collectSearchDirectories(ModuleRegistry &reg,
 	auto addDirectory = [&](const std::filesystem::path &dir) {
 		if (dir.empty())
 			return;
+		auto canonical = files::canonicalPath(dir);
 		std::error_code ec;
-		auto canonical = std::filesystem::weakly_canonical(dir, ec);
-		if (ec) {
-			canonical = std::filesystem::absolute(dir, ec);
-		}
-		if (ec)
-			return;
 		if (!std::filesystem::exists(canonical, ec) || ec)
 			return;
 		std::string key = stringToLower(canonical.string());

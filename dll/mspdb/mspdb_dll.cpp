@@ -21,6 +21,35 @@ static void writeOut32(void *ptr, uint32_t val) {
 	if (ptr) *(uint32_t *)ptr = val;
 }
 
+static FILE *getPdbLogFile() {
+	static FILE *logFile = nullptr;
+	static bool tried = false;
+	if (!tried) {
+		tried = true;
+		const char *path = getenv("WIBO_PDB_LOG");
+		if (path && path[0]) {
+			logFile = fopen(path, "w");
+		}
+	}
+	return logFile;
+}
+
+static void pdbTrace(const char *msg) {
+	FILE *f = getPdbLogFile();
+	if (f) {
+		fprintf(f, "[mspdb] %s\n", msg);
+		fflush(f);
+	}
+}
+
+static void pdbTraceRA(const char *msg, void *ra) {
+	FILE *f = getPdbLogFile();
+	if (f) {
+		fprintf(f, "[mspdb] %s (retaddr=%p)\n", msg, ra);
+		fflush(f);
+	}
+}
+
 // Forward-declared addresses (defined after all struct definitions)
 struct FakePDB;
 struct FakeDBI;
@@ -42,31 +71,41 @@ extern FakeStream g_stream;
 // --- PDB interface (64 vtable slots) ---
 struct FakePDB {
 	// 0: QueryInterfaceVersion
-	virtual uint32_t __thiscall QueryInterfaceVersion() { return PDB_INTV; }
+	virtual uint32_t __thiscall QueryInterfaceVersion() { pdbTrace("PDB::QueryInterfaceVersion"); return PDB_INTV; }
 	// 1: QueryImplementationVersion
-	virtual uint32_t __thiscall QueryImplementationVersion() { return PDB_IMPV; }
+	virtual uint32_t __thiscall QueryImplementationVersion() { pdbTrace("PDB::QueryImplementationVersion"); return PDB_IMPV; }
 	// 2: QueryLastError(char szError[])
-	virtual uint32_t __thiscall QueryLastError(char *sz) { if (sz) *sz = 0; return 0; }
+	virtual uint32_t __thiscall QueryLastError(char *sz) { pdbTrace("PDB::QueryLastError"); if (sz) *sz = 0; return 0; }
 	// 3: QueryPDBName(char szPDB[])
-	virtual char * __thiscall QueryPDBName(char *sz) { if (sz) *sz = 0; return nullptr; }
+	virtual char * __thiscall QueryPDBName(char *sz) { pdbTrace("PDB::QueryPDBName"); if (sz) *sz = 0; return nullptr; }
 	// 4: QuerySignature
-	virtual uint32_t __thiscall QuerySignature() { return 0; }
+	virtual uint32_t __thiscall QuerySignature() { pdbTrace("PDB::QuerySignature"); return 0; }
 	// 5: QueryAge
-	virtual uint32_t __thiscall QueryAge() { return 1; }
+	virtual uint32_t __thiscall QueryAge() { pdbTraceRA("PDB::QueryAge", __builtin_return_address(0)); return 1; }
 	// 6: CreateDBI(szTarget, DBI**)
-	virtual int __thiscall CreateDBI(const char *, void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_dbi); return 1; }
+	virtual int __thiscall CreateDBI(const char *, void **pp) { pdbTraceRA("PDB::CreateDBI", __builtin_return_address(0)); writeOut32(pp, (uint32_t)(uintptr_t)&g_dbi); return 1; }
 	// 7: OpenDBI(szTarget, szMode, DBI**)
-	virtual int __thiscall OpenDBI(const char *, const char *, void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_dbi); return 1; }
+	virtual int __thiscall OpenDBI(const char *, const char *, void **pp) { pdbTraceRA("PDB::OpenDBI", __builtin_return_address(0)); writeOut32(pp, (uint32_t)(uintptr_t)&g_dbi); return 1; }
 	// 8: OpenTpi(szMode, TPI**)
-	virtual int __thiscall OpenTpi(const char *, void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_tpi); return 1; }
-	// 9: OpenIpi(szMode, TPI**)
-	virtual int __thiscall OpenIpi(const char *, void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_tpi); return 1; }
+	virtual int __thiscall OpenTpi(const char *, void **pp) {
+		pdbTraceRA("PDB::OpenTpi", __builtin_return_address(0));
+		writeOut32(pp, (uint32_t)(uintptr_t)&g_tpi);
+		return 1;
+	}
+	// 9: OpenIpi — VS2008 placeholder (0 stack args, returns success)
+	// In VS2015, OpenIpi takes (szMode, TPI**) but the VS2008/VS2010
+	// compiler calls this slot with 0 args as a no-op. Using 0 args
+	// avoids `ret 8` stack corruption from the 2-arg VS2015 signature.
+	virtual int __thiscall OpenIpi() { pdbTraceRA("PDB::OpenIpi", __builtin_return_address(0)); return 1; }
 	// 10: Commit
-	virtual int __thiscall Commit() { return 1; }
+	virtual int __thiscall Commit() {
+		pdbTraceRA("PDB::Commit", __builtin_return_address(0));
+		return 1;
+	}
 	// 11: Close
-	virtual int __thiscall Close() { return 1; }
+	virtual int __thiscall Close() { pdbTraceRA("PDB::Close", __builtin_return_address(0)); return 1; }
 	// 12: OpenStream(szStream, Stream**)
-	virtual int __thiscall OpenStream(const char *, void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_stream); return 1; }
+	virtual int __thiscall OpenStream(const char *, void **pp) { pdbTraceRA("PDB::OpenStream", __builtin_return_address(0)); writeOut32(pp, (uint32_t)(uintptr_t)&g_stream); return 1; }
 	// 13: GetEnumStreamNameMap
 	virtual int __thiscall GetEnumStreamNameMap(void *) { return 0; }
 	// 14: GetRawBytes
@@ -143,19 +182,19 @@ struct FakePDB {
 // --- DBI interface (64 vtable slots) ---
 struct FakeDBI {
 	// 0: QueryImplementationVersion
-	virtual uint32_t __thiscall QueryImplementationVersion() { return PDB_IMPV; }
+	virtual uint32_t __thiscall QueryImplementationVersion() { pdbTraceRA("DBI::QueryImplementationVersion", __builtin_return_address(0)); return PDB_IMPV; }
 	// 1: QueryInterfaceVersion
-	virtual uint32_t __thiscall QueryInterfaceVersion() { return PDB_INTV; }
+	virtual uint32_t __thiscall QueryInterfaceVersion() { pdbTraceRA("DBI::QueryInterfaceVersion", __builtin_return_address(0)); return PDB_INTV; }
 	// 2: OpenMod(szModule, szFile, Mod**)
-	virtual int __thiscall OpenMod(const char *, const char *, void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_mod); return 1; }
+	virtual int __thiscall OpenMod(const char *, const char *, void **pp) { pdbTraceRA("DBI::OpenMod", __builtin_return_address(0)); writeOut32(pp, (uint32_t)(uintptr_t)&g_mod); return 1; }
 	// 3: DeleteMod
-	virtual int __thiscall DeleteMod(const char *) { return 1; }
+	virtual int __thiscall DeleteMod(const char *) { pdbTrace("DBI::DeleteMod"); return 1; }
 	// 4: QueryNextMod(pmod, ppmodNext) -> *ppmodNext = NULL
-	virtual int __thiscall QueryNextMod(void *, void **pp) { writeOut32(pp, 0); return 1; }
+	virtual int __thiscall QueryNextMod(void *, void **pp) { pdbTrace("DBI::QueryNextMod"); writeOut32(pp, 0); return 1; }
 	// 5: OpenGlobals(GSI**)
-	virtual int __thiscall OpenGlobals(void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_gsi); return 1; }
+	virtual int __thiscall OpenGlobals(void **pp) { pdbTraceRA("DBI::OpenGlobals", __builtin_return_address(0)); writeOut32(pp, (uint32_t)(uintptr_t)&g_gsi); return 1; }
 	// 6: OpenPublics(GSI**)
-	virtual int __thiscall OpenPublics(void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_gsi); return 1; }
+	virtual int __thiscall OpenPublics(void **pp) { pdbTraceRA("DBI::OpenPublics", __builtin_return_address(0)); writeOut32(pp, (uint32_t)(uintptr_t)&g_gsi); return 1; }
 	// 7: AddSec
 	virtual int __thiscall AddSec(uint16_t, uint16_t, uint32_t, uint32_t) { return 1; }
 	// 8: QueryModFromAddr
@@ -217,7 +256,7 @@ struct FakeDBI {
 	// 36: QueryTypeServerByPdb
 	virtual int __thiscall QueryTypeServerByPdb(const char *, uint32_t *) { return 0; }
 	// 37: OpenModW(szModule, szFile, Mod**)
-	virtual int __thiscall OpenModW(const wchar_t *, const wchar_t *, void **pp) { writeOut32(pp, (uint32_t)(uintptr_t)&g_mod); return 1; }
+	virtual int __thiscall OpenModW(const wchar_t *, const wchar_t *, void **pp) { pdbTraceRA("DBI::OpenModW", __builtin_return_address(0)); writeOut32(pp, (uint32_t)(uintptr_t)&g_mod); return 1; }
 	// 38: DeleteModW
 	virtual int __thiscall DeleteModW(const wchar_t *) { return 1; }
 	// 39: AddPublicW
@@ -382,39 +421,39 @@ struct FakeMod {
 // --- TPI interface (32 vtable slots) ---
 struct FakeTPI {
 	// 0: QueryInterfaceVersion
-	virtual uint32_t __thiscall QueryInterfaceVersion() { return PDB_INTV; }
+	virtual uint32_t __thiscall QueryInterfaceVersion() { pdbTrace("TPI::QueryInterfaceVersion"); return PDB_INTV; }
 	// 1: QueryImplementationVersion
-	virtual uint32_t __thiscall QueryImplementationVersion() { return PDB_IMPV; }
+	virtual uint32_t __thiscall QueryImplementationVersion() { pdbTrace("TPI::QueryImplementationVersion"); return PDB_IMPV; }
 	// 2-4: Ti16 queries
-	virtual int __thiscall QueryTi16ForCVRecord(void *, void *) { return 0; }
-	virtual int __thiscall QueryCVRecordForTi16(uint32_t, void *, uint32_t *) { return 0; }
-	virtual int __thiscall QueryPbCVRecordForTi16(uint32_t, void **) { return 0; }
+	virtual int __thiscall QueryTi16ForCVRecord(void *, void *) { pdbTrace("TPI::QueryTi16ForCVRecord"); return 0; }
+	virtual int __thiscall QueryCVRecordForTi16(uint32_t, void *, uint32_t *) { pdbTrace("TPI::QueryCVRecordForTi16"); return 0; }
+	virtual int __thiscall QueryPbCVRecordForTi16(uint32_t, void **) { pdbTrace("TPI::QueryPbCVRecordForTi16"); return 0; }
 	// 5-7: Ti16 range + size
-	virtual uint16_t __thiscall QueryTi16Min() { return 0; }
-	virtual uint16_t __thiscall QueryTi16Mac() { return 0; }
-	virtual int32_t __thiscall QueryCb() { return 0; }
+	virtual uint16_t __thiscall QueryTi16Min() { pdbTrace("TPI::QueryTi16Min"); return 0; }
+	virtual uint16_t __thiscall QueryTi16Mac() { pdbTrace("TPI::QueryTi16Mac"); return 0; }
+	virtual int32_t __thiscall QueryCb() { pdbTrace("TPI::QueryCb"); return 0; }
 	// 8: Close
-	virtual int __thiscall Close() { return 1; }
+	virtual int __thiscall Close() { pdbTraceRA("TPI::Close", __builtin_return_address(0)); return 1; }
 	// 9: Commit
-	virtual int __thiscall Commit() { return 1; }
+	virtual int __thiscall Commit() { pdbTraceRA("TPI::Commit", __builtin_return_address(0)); return 1; }
 	// 10: QueryTi16ForUDT
-	virtual int __thiscall QueryTi16ForUDT(const char *, int, void *) { return 0; }
+	virtual int __thiscall QueryTi16ForUDT(const char *, int, void *) { pdbTrace("TPI::QueryTi16ForUDT"); return 0; }
 	// 11: SupportQueryTiForUDT
-	virtual int __thiscall SupportQueryTiForUDT() { return 0; }
+	virtual int __thiscall SupportQueryTiForUDT() { pdbTrace("TPI::SupportQueryTiForUDT"); return 0; }
 	// 12: fIs16bitTypePool
-	virtual int __thiscall fIs16bitTypePool() { return 0; }
+	virtual int __thiscall fIs16bitTypePool() { pdbTrace("TPI::fIs16bitTypePool"); return 0; }
 	// 13: QueryTiForUDT
-	virtual int __thiscall QueryTiForUDT(const char *, int, void *) { return 0; }
+	virtual int __thiscall QueryTiForUDT(const char *, int, void *) { pdbTrace("TPI::QueryTiForUDT"); return 0; }
 	// 14: QueryTiForCVRecord
-	virtual int __thiscall QueryTiForCVRecord(void *, void *) { return 0; }
+	virtual int __thiscall QueryTiForCVRecord(void *, void *) { pdbTrace("TPI::QueryTiForCVRecord"); return 0; }
 	// 15: QueryCVRecordForTi
-	virtual int __thiscall QueryCVRecordForTi(uint32_t, void *, uint32_t *) { return 0; }
+	virtual int __thiscall QueryCVRecordForTi(uint32_t, void *, uint32_t *) { pdbTrace("TPI::QueryCVRecordForTi"); return 0; }
 	// 16: QueryPbCVRecordForTi
-	virtual int __thiscall QueryPbCVRecordForTi(uint32_t, void **) { return 0; }
+	virtual int __thiscall QueryPbCVRecordForTi(uint32_t, void **) { pdbTrace("TPI::QueryPbCVRecordForTi"); return 0; }
 	// 17: QueryTiMin
-	virtual uint32_t __thiscall QueryTiMin() { return 0x1000; }
+	virtual uint32_t __thiscall QueryTiMin() { pdbTrace("TPI::QueryTiMin"); return 0x1000; }
 	// 18: QueryTiMac
-	virtual uint32_t __thiscall QueryTiMac() { return 0x1000; }
+	virtual uint32_t __thiscall QueryTiMac() { pdbTrace("TPI::QueryTiMac"); return 0x1000; }
 	// 19: AreTypesEqual
 	virtual int __thiscall AreTypesEqual(uint32_t, uint32_t) { return 0; }
 	// 20: IsTypeServed
@@ -534,28 +573,29 @@ static uint32_t g_fakeStreamLegacy = 0;
 
 // --- C-style exports ---
 
-static int openPDB(int32_t *pec, void **ppPDB) {
+static int openPDB(const char *caller, int32_t *pec, void **ppPDB) {
+	pdbTrace(caller);
 	if (pec) *pec = 0;
 	if (ppPDB) *(uint32_t *)ppPDB = (uint32_t)(uintptr_t)&g_pdb;
 	return 1;
 }
 
-DLLEXPORT int __cdecl PDB_Open2W(const wchar_t *, const char *, int32_t *pec, wchar_t *, unsigned int, void **ppPDB) {
-	return openPDB(pec, ppPDB);
+DLLEXPORT int __cdecl PDB_Open2W(const wchar_t *wszPDB, const char *szMode, int32_t *pec, wchar_t *, unsigned int, void **ppPDB) {
+	return openPDB("PDB_Open2W", pec, ppPDB);
 }
 
 DLLEXPORT int __cdecl PDB_Open3W(const wchar_t *, const char *, uint32_t, void *, uint32_t, int32_t *pec,
                                   wchar_t *, unsigned int, void **ppPDB) {
-	return openPDB(pec, ppPDB);
+	return openPDB("PDB_Open3W", pec, ppPDB);
 }
 
 DLLEXPORT int __cdecl PDB_OpenValidate5(const wchar_t *, const wchar_t *, void *, void *, void *, uint32_t,
                                          int32_t *pec, wchar_t *, unsigned int, void **ppPDB) {
-	return openPDB(pec, ppPDB);
+	return openPDB("PDB_OpenValidate5", pec, ppPDB);
 }
 
-DLLEXPORT int __cdecl PDBOpenEx2W(const wchar_t *, const char *, int32_t *pec, wchar_t *, unsigned int, void **ppPDB) {
-	return openPDB(pec, ppPDB);
+DLLEXPORT int __cdecl PDBOpenEx2W(const wchar_t *, const char *, long cbPage, int32_t *pec, wchar_t *, unsigned int, void **ppPDB) {
+	return openPDB("PDBOpenEx2W", pec, ppPDB);
 }
 
 DLLEXPORT int __cdecl PDBExportValidateInterface(uint32_t) {
@@ -619,12 +659,107 @@ DLLEXPORT uint32_t __cdecl SigForPbCb(const unsigned char *pb, uint32_t cb, uint
 	return crc;
 }
 
+// --- Types* C-style wrappers (delegate to TPI vtable methods) ---
+// These are C API wrappers around TPI COM methods, used by c1xx.dll with /Zi
+
+DLLEXPORT uint32_t __cdecl TypesQueryInterfaceVersion(void *ptpi) {
+	return PDB_INTV;
+}
+
+DLLEXPORT uint32_t __cdecl TypesQueryImplementationVersion(void *ptpi) {
+	return PDB_IMPV;
+}
+
+DLLEXPORT int __cdecl TypesQueryTiForCVRecordEx(void *ptpi, void *pb, void *pti) {
+	static uint32_t nextTi = 0x1000;
+	pdbTraceRA("TypesQueryTiForCVRecordEx", __builtin_return_address(0));
+	if (pti) {
+		*(uint32_t *)pti = nextTi++;
+	}
+	return 1;
+}
+
+DLLEXPORT int __cdecl TypesQueryCVRecordForTiEx(void *ptpi, uint32_t ti, void *pb, int32_t *pcb) {
+	if (pcb) *pcb = 0;
+	return 0;
+}
+
+DLLEXPORT int __cdecl TypesQueryPbCVRecordForTiEx(void *ptpi, uint32_t ti, void **ppb) {
+	if (ppb) *ppb = nullptr;
+	return 0;
+}
+
+DLLEXPORT uint32_t __cdecl TypesQueryTiMinEx(void *ptpi) {
+	return 0x1000;
+}
+
+DLLEXPORT uint32_t __cdecl TypesQueryTiMacEx(void *ptpi) {
+	return 0x1000;
+}
+
+DLLEXPORT int32_t __cdecl TypesQueryCb(void *ptpi) {
+	return 0;
+}
+
+DLLEXPORT int __cdecl TypesClose(void *ptpi) {
+	return 1;
+}
+
+DLLEXPORT int __cdecl TypesCommit(void *ptpi) {
+	return 1;
+}
+
+DLLEXPORT int __cdecl TypesQueryTiForUDTEx(void *ptpi, const char *sz, int fCase, void *pti) {
+	return 0;
+}
+
+DLLEXPORT int __cdecl TypesSupportQueryTiForUDT(void *ptpi) {
+	return 0;
+}
+
+DLLEXPORT int __cdecl TypesfIs16bitTypePool(void *ptpi) {
+	return 0;
+}
+
+DLLEXPORT int __cdecl TypesAreTypesEqual(void *ptpi, uint32_t ti1, uint32_t ti2) {
+	return 0;
+}
+
+DLLEXPORT int __cdecl TypesIsTypeServed(void *ptpi, uint32_t ti) {
+	return 0;
+}
+
+// --- MREngine (Minimal Rebuild Engine) stubs ---
+// Required by c1xx.dll when /Zi is used. Return failure so the compiler
+// falls back to full compilation instead of minimal rebuild.
+
+// MREngine::FOpenW(MREngine**, const wchar_t*, long&, wchar_t*, unsigned int, int, int)
+// Mangled: ?FOpenW@MREngine@@SGHPAPAU1@PBGAAJPAGIHH@Z
+DLLEXPORT int __stdcall MREngine_FOpenW(void **ppMre, const wchar_t *wszPdb,
+                                         int32_t *plEc, wchar_t *wszErr,
+                                         unsigned int cchErr, int f1, int f2) {
+	pdbTrace("MREngine::FOpenW");
+	if (ppMre) *(uint32_t *)ppMre = 0;
+	if (plEc) *plEc = 0;
+	return 0; // failure
+}
+
+// MREngine::FOpen(MREngine**, MreToPdb*, int, int)
+// Mangled: ?FOpen@MREngine@@SGHPAPAU1@PAUMreToPdb@@HH@Z
+DLLEXPORT int __stdcall MREngine_FOpen(void **ppMre, void *pMreToPdb,
+                                        int f1, int f2) {
+	pdbTrace("MREngine::FOpen");
+	if (ppMre) *(uint32_t *)ppMre = 0;
+	return 0; // failure
+}
+
 DLLEXPORT const char * __cdecl SzCanonFilename(const char *sz) {
 	return sz;
 }
 
 DLLEXPORT int __cdecl PDB_Open2W_C(const wchar_t *, const char *, int32_t *pec, wchar_t *, unsigned int, void **ppPDB) {
-	return openPDB(pec, ppPDB);
+	fprintf(stderr, "[mspdb] PDB_Open2W_C: pec=%p ppPDB=%p\n", (void*)pec, (void*)ppPDB);
+	return openPDB("PDB_Open2W_C", pec, ppPDB);
 }
 
 DLLEXPORT int __cdecl PDBOpenStreamEx(void *, const char *, uint32_t, void **ppStream) {

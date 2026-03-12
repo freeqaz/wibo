@@ -38,6 +38,8 @@ void trackMappedFile(dev_t dev, ino_t ino);
 void untrackMappedFile(dev_t dev, ino_t ino);
 bool isFileMapped(int fd);
 
+void reportFilesCacheStats();
+
 } // namespace files
 
 inline bool endsWith(const std::string &str, const std::string &suffix) {

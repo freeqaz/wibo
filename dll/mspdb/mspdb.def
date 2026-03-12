@@ -4,6 +4,8 @@ EXPORTS
     ?Open3W@PDB@@SAHPBGPBDKPBU_GUID@@KPAJPAGIPAPAU1@@Z = PDB_Open3W
     ?OpenValidate5@PDB@@SAHPBG0PAXP6AP6AHXZ1W4POVC@@@ZPAJPAGIPAPAU1@@Z = PDB_OpenValidate5
     ?open@NameMap@@SAHPAUPDB@@HPAPAU1@@Z = NameMap_open
+    ?FOpenW@MREngine@@SGHPAPAU1@PBGAAJPAGIHH@Z = MREngine_FOpenW
+    ?FOpen@MREngine@@SGHPAPAU1@PAUMreToPdb@@HH@Z = MREngine_FOpen
     PDBOpen2W = PDB_Open2W_C
     PDBExportValidateInterface
     PDBCommit
